@@ -114,20 +114,30 @@ print()
 
 # Get market data with PB
 print("  Fetching market data (PE/PB)...")
-spot = retry_call(lambda: ak.stock_zh_a_spot_em(), "stock_zh_a_spot_em")
-spot = spot[spot["代码"].isin(universe)].copy()
+spot = None
+try:
+    spot = retry_call(lambda: ak.stock_zh_a_spot_em(), "stock_zh_a_spot_em", max_retries=2, delay=8)
+except Exception as e:
+    print(f"  WARNING: spot data unavailable ({e})")
+    print("  Falling back to fundamentals-only screening (no PB filter)")
 
-# Find PB column
-pb_col = None
-for c in spot.columns:
-    if "市净率" in c:
-        pb_col = c
-        break
-if not pb_col:
-    print("ERROR: PB column not found")
-    sys.exit(1)
-
-spot["pb"] = pd.to_numeric(spot[pb_col], errors="coerce")
+if spot is not None:
+    spot = spot[spot["代码"].isin(universe)].copy()
+    pb_col = None
+    for c in spot.columns:
+        if "市净率" in c:
+            pb_col = c
+            break
+    if pb_col:
+        spot["pb"] = pd.to_numeric(spot[pb_col], errors="coerce")
+    else:
+        print("  WARNING: PB column not found in spot data")
+        spot["pb"] = np.nan
+else:
+    # Create minimal DataFrame with just codes
+    spot = pd.DataFrame({"代码": list(universe), "名称": list(universe)})
+    spot["pb"] = np.nan
+    pb_col = "pb"
 
 # ── Step 4: Get Fundamental Data ──
 print("  Fetching financial metrics (this takes ~30-60s)...")
@@ -179,7 +189,7 @@ for _, row in spot.iterrows():
     name = row.get("名称", code)
     pb = row.get("pb")
 
-    if pd.isna(pb) or pb <= 0:
+    if pd.notna(pb) and pb <= 0:
         continue
 
     fd = fund_data.get(code, {})
@@ -190,26 +200,26 @@ for _, row in spot.iterrows():
     #  individual stock calls. We proxy with available metrics and note limitations.)
 
     if temperature == "COLD":
-        if pb >= 1:
+        if pd.notna(pb) and pb >= 1:
             continue
         if roe is not None and roe <= 1.5:
             continue
         if profit_yoy is not None and profit_yoy <= -15:
             continue
         # Rank by proxy: ROE/PB
-        score = roe / pb if (roe and roe > 0) else (1.0 / pb if pb > 0 else 0)
+        score = roe / pb if (roe and roe > 0 and pd.notna(pb) and pb > 0) else (1.0 / pb if pd.notna(pb) and pb > 0 else 0)
 
     elif temperature == "WARM":
-        if pb >= 1:
+        if pd.notna(pb) and pb >= 1:
             continue
         if roe is not None and roe <= 2.0:
             continue
         if profit_yoy is not None and profit_yoy <= 0:
             continue
-        score = roe / pb if (roe and roe > 0) else (1.0 / pb if pb > 0 else 0)
+        score = roe / pb if (roe and roe > 0 and pd.notna(pb) and pb > 0) else (1.0 / pb if pd.notna(pb) and pb > 0 else 0)
 
     elif temperature == "HOT":
-        if pb <= 3:
+        if pd.notna(pb) and pb <= 3:
             continue
         if roe is not None and roe <= 3.0:
             continue
