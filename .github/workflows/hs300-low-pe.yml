@@ -1,0 +1,32 @@
+name: CSI 300 Low PE Monthly Screener
+
+on:
+  workflow_dispatch:  # Manual trigger for testing
+  schedule:
+    # Every 1st-7th day of month at 20:00 UTC
+    # Script internally checks if it's a trading day
+    - cron: '0 20 1-7 * *'
+
+jobs:
+  screen-low-pe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install akshare pandas
+
+      - name: Run CSI 300 Low PE screener
+        env:
+          PYTHONIOENCODING: utf-8
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: python scripts/hs300_low_pe.py

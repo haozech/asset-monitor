@@ -1,0 +1,31 @@
+name: VOO 200 SMA Weekly Monitor
+
+on:
+  workflow_dispatch:  # Manual trigger for testing
+  schedule:
+    # Every Friday at 20:00 UTC = Saturday 04:00 Beijing
+    - cron: '0 20 * * 5'
+
+jobs:
+  check-voo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install yfinance
+
+      - name: Run VOO 200 SMA check
+        env:
+          PYTHONIOENCODING: utf-8
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: python scripts/check_voo_200sma.py
