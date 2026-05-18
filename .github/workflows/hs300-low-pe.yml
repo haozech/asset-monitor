@@ -3,9 +3,9 @@ name: HS300 White-Horse Strategy Monthly Signal
 on:
   workflow_dispatch:  # Manual trigger
   schedule:
-    # Every 1st-7th day of month at 20:00 UTC
+    # Every 1st-10th day of month at 20:00 UTC
     # Script internally checks if it's a trading day
-    - cron: '0 20 1-7 * *'
+    - cron: '0 20 1-10 * *'
 
 jobs:
   baima-signal:
