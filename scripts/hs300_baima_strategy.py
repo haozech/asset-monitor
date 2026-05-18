@@ -53,11 +53,11 @@ print("=" * 60)
 # Get 000300 index data via yfinance (more reliable from GitHub Actions US runners)
 print("  Fetching 000300 index via yfinance...")
 try:
-    index_hist = yf.download('000300.SS', period='1y', progress=False)
+    ticker = yf.Ticker('000300.SS')
+    index_hist = ticker.history(period='1y')
     if index_hist.empty:
         raise ValueError("No data from yfinance")
-    closes = index_hist['Close'].values.flatten()[-220:]
-    closes = closes[~np.isnan(closes)]
+    closes = index_hist['Close'].values[-220:]
 except Exception as e:
     print(f"  yfinance failed ({e}), trying akshare fallback...")
     index_df = retry_call(lambda: ak.stock_zh_index_daily_em(symbol="sh000300"), "index_daily", max_retries=3, delay=10)
