@@ -8,6 +8,7 @@ Based on joinquant_baima_attack_defense_original_fixed.py
 import akshare as ak
 import numpy as np
 import pandas as pd
+import yfinance as yf
 import time
 import os, sys
 from datetime import datetime, date, timedelta
@@ -49,10 +50,19 @@ print("=" * 60)
 print("STEP 2: Market Temperature (沪深300)")
 print("=" * 60)
 
-# Get 000300 index data
-index_df = retry_call(lambda: ak.stock_zh_index_daily_em(symbol="sh000300"), "index_daily")
-index_df = index_df.sort_values("date")
-closes = index_df["close"].values[-220:]  # Last 220 trading days
+# Get 000300 index data via yfinance (more reliable from GitHub Actions US runners)
+print("  Fetching 000300 index via yfinance...")
+try:
+    index_hist = yf.download('000300.SS', period='1y', progress=False)
+    if index_hist.empty:
+        raise ValueError("No data from yfinance")
+    closes = index_hist['Close'].values.flatten()[-220:]
+    closes = closes[~np.isnan(closes)]
+except Exception as e:
+    print(f"  yfinance failed ({e}), trying akshare fallback...")
+    index_df = retry_call(lambda: ak.stock_zh_index_daily_em(symbol="sh000300"), "index_daily", max_retries=3, delay=10)
+    index_df = index_df.sort_values("date")
+    closes = index_df["close"].values[-220:]
 
 if len(closes) < 60:
     print(f"ERROR: Only {len(closes)} data points for 000300")
