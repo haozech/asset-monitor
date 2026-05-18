@@ -8,8 +8,21 @@ Based on joinquant_baima_attack_defense_original_fixed.py
 import akshare as ak
 import numpy as np
 import pandas as pd
+import time
 import os, sys
 from datetime import datetime, date, timedelta
+
+# ── Retry helper for unreliable East Money connections ──
+def retry_call(fn, name, max_retries=3, delay=5):
+    for attempt in range(1, max_retries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            if attempt == max_retries:
+                print(f"ERROR: {name} failed after {max_retries} attempts: {e}")
+                raise
+            print(f"  Retry {attempt}/{max_retries} for {name}: {e}")
+            time.sleep(delay * attempt)
 
 # ── Strategy Parameters ──
 BUY_STOCK_COUNT = 10
@@ -19,7 +32,7 @@ UNKNOWN_INDUSTRY = "UNKNOWN"
 # ── Step 1: Check trading day ──
 print(f"[{datetime.now().isoformat()}] Checking trading calendar...")
 try:
-    cal = ak.tool_trade_date_hist_sina()
+    cal = retry_call(lambda: ak.tool_trade_date_hist_sina(), "trading_calendar")
     trading_days = set(str(d) for d in cal["trade_date"].tolist())
 except Exception as e:
     print(f"WARNING: Calendar fetch failed ({e}), assuming today is trading day")
@@ -37,7 +50,7 @@ print("STEP 2: Market Temperature (沪深300)")
 print("=" * 60)
 
 # Get 000300 index data
-index_df = ak.stock_zh_index_daily_em(symbol="sh000300")
+index_df = retry_call(lambda: ak.stock_zh_index_daily_em(symbol="sh000300"), "index_daily")
 index_df = index_df.sort_values("date")
 closes = index_df["close"].values[-220:]  # Last 220 trading days
 
@@ -91,7 +104,7 @@ print()
 
 # Get market data with PB
 print("  Fetching market data (PE/PB)...")
-spot = ak.stock_zh_a_spot_em()
+spot = retry_call(lambda: ak.stock_zh_a_spot_em(), "stock_zh_a_spot_em")
 spot = spot[spot["代码"].isin(universe)].copy()
 
 # Find PB column
@@ -111,7 +124,7 @@ print("  Fetching financial metrics (this takes ~30-60s)...")
 
 # Try to get quarterly performance data for ROE, profit growth
 try:
-    yjbb = ak.stock_yjbb_em(date=today)
+    yjbb = retry_call(lambda: ak.stock_yjbb_em(date=today), "stock_yjbb_em")
     # Columns typically include: 股票代码, 股票简称, 净资产收益率, 净利润同比增长率, etc.
     print(f"  Performance reports loaded: {len(yjbb)} rows")
 except Exception as e:
