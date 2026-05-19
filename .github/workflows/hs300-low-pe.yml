@@ -22,11 +22,12 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install akshare numpy pandas yfinance
+        run: pip install akshare numpy pandas yfinance tushare
 
       - name: Run White-Horse Strategy
         env:
           PYTHONIOENCODING: utf-8
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: python scripts/hs300_baima_strategy.py

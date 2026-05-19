@@ -9,6 +9,7 @@ import akshare as ak
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import tushare as ts
 import time
 import os, sys
 from datetime import datetime, date, timedelta
@@ -29,6 +30,15 @@ def retry_call(fn, name, max_retries=3, delay=5):
 BUY_STOCK_COUNT = 10
 MIN_INDUSTRY_COUNT = 5
 UNKNOWN_INDUSTRY = "UNKNOWN"
+
+# ── Tushare setup ──
+TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
+if TUSHARE_TOKEN:
+    ts.set_token(TUSHARE_TOKEN)
+    tushare_pro = ts.pro_api()
+else:
+    tushare_pro = None
+    print("WARNING: TUSHARE_TOKEN not set, industry data will be limited")
 
 # ── Step 1: Check trading day ──
 print(f"[{datetime.now().isoformat()}] Checking trading calendar...")
@@ -246,19 +256,38 @@ print("=" * 60)
 print("STEP 4: Industry Diversification (申万一级)")
 print("=" * 60)
 
-# Get industry for top candidates
+# Get industry for ALL stocks via Tushare bak_basic (one API call)
 industry_map = {}
-top_candidates = candidates[:50]  # Look at top 50 for diversification
 
-# Batch industry lookup using get_industry via akshare
-for c in top_candidates[:30]:  # Limit API calls
+if tushare_pro:
     try:
-        ind_df = ak.stock_individual_info_em(symbol=c["代码"])
-        ind_row = ind_df[ind_df["item"] == "行业"]
-        industry = ind_row["value"].values[0] if len(ind_row) > 0 else UNKNOWN_INDUSTRY
-    except Exception:
-        industry = UNKNOWN_INDUSTRY
-    industry_map[c["代码"]] = industry
+        bb = tushare_pro.bak_basic(trade_date=today.replace("-", ""),
+                                   fields="ts_code,name,industry")
+        # Map Tushare ts_code (000001.SZ) -> plain code (000001)
+        for _, row in bb.iterrows():
+            ts_code = row["ts_code"]
+            plain_code = ts_code.split(".")[0]  # 000001.SZ -> 000001
+            industry_map[plain_code] = row.get("industry", UNKNOWN_INDUSTRY)
+        print(f"  Tushare: loaded {len(industry_map)} stocks with industry data")
+    except Exception as e:
+        print(f"  Tushare bak_basic failed: {e}")
+
+# Fallback: per-stock akshare lookup if Tushare unavailable
+if not industry_map:
+    print("  Falling back to akshare per-stock lookup...")
+    for c in candidates[:30]:
+        try:
+            ind_df = ak.stock_individual_info_em(symbol=c["代码"])
+            ind_row = ind_df[ind_df["item"] == "行业"]
+            industry = ind_row["value"].values[0] if len(ind_row) > 0 else UNKNOWN_INDUSTRY
+        except Exception:
+            industry = UNKNOWN_INDUSTRY
+        industry_map[c["代码"]] = industry
+
+used_count = len(industry_map)
+ind_count = len(set(v for v in industry_map.values() if v != UNKNOWN_INDUSTRY))
+print(f"  Industry data: {used_count} stocks, {ind_count} unique industries")
+print()
 
 # Diversify: pick one stock per industry first
 selected = []
@@ -322,15 +351,17 @@ print("=" * 60)
 print("DATA NOTES")
 print("=" * 60)
 print("""
-  ⚠ akshare free tier limitations vs JoinQuant:
-  - PB, ROE, profit_yoy: Available via spot + 业绩快报
-  - Cash flow/profit ratio: NOT available → not filtered
-  - Adjusted profit: NOT available → not filtered
-  - ROA: NOT available → proxy used (ROE/PB or ROE)
-  - Industry: Best-effort via stock_individual_info_em()
+  Data sources:
+  - Index temperature: yfinance (000300.SS)
+  - Trading calendar: akshare (Sina)
+  - CSI 300 constituents: akshare (csindex)
+  - Industry: Tushare bak_basic (5523 stocks, one call)
+  - ROE / profit growth: akshare stock_yjbb_em
+  - PB: akshare (best-effort; may fall back if blocked)
 
-  These are reasonable approximations. For production use,
-  consider Tushare (free tier) or JoinQuant data.
+  Tushare free token limitations:
+  - daily_basic (PB/PE), fina_indicator (ROA), cashflow: need 2000 pts
+  - Currently proxying with available data
 """)
 
 # ── Build email body ──
