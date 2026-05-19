@@ -62,17 +62,30 @@ print("=" * 60)
 
 # Get 000300 index data via yfinance (more reliable from GitHub Actions US runners)
 print("  Fetching 000300 index via yfinance...")
-try:
-    ticker = yf.Ticker('000300.SS')
-    index_hist = ticker.history(period='1y')
-    if index_hist.empty:
-        raise ValueError("No data from yfinance")
-    closes = index_hist['Close'].values[-220:]
-except Exception as e:
-    print(f"  yfinance failed ({e}), trying akshare fallback...")
+closes = None
+for attempt in range(3):
+    try:
+        ticker = yf.Ticker('000300.SS')
+        index_hist = ticker.history(period='1y')
+        if not index_hist.empty:
+            raw = index_hist['Close'].values[-220:]
+            raw = raw[~np.isnan(raw)]  # Filter NaN
+            if len(raw) >= 60:
+                closes = raw
+                break
+        print(f"  yfinance attempt {attempt+1}: empty or insufficient data")
+    except Exception as e:
+        print(f"  yfinance attempt {attempt+1} failed: {e}")
+    time.sleep(5)
+
+if closes is None:
+    print("  yfinance all attempts failed, trying akshare fallback...")
     index_df = retry_call(lambda: ak.stock_zh_index_daily_em(symbol="sh000300"), "index_daily", max_retries=3, delay=10)
     index_df = index_df.sort_values("date")
     closes = index_df["close"].values[-220:]
+
+closes = closes[~np.isnan(closes)]
+print(f"  Index data: {len(closes)} valid closes")
 
 if len(closes) < 60:
     print(f"ERROR: Only {len(closes)} data points for 000300")
@@ -150,16 +163,23 @@ else:
     pb_col = "pb"
 
 # ── Step 4: Get Fundamental Data ──
-print("  Fetching financial metrics (this takes ~30-60s)...")
+print("  Fetching financial metrics (trying recent dates)...")
 
-# Try to get quarterly performance data for ROE, profit growth
-try:
-    yjbb = retry_call(lambda: ak.stock_yjbb_em(date=today), "stock_yjbb_em")
-    # Columns typically include: 股票代码, 股票简称, 净资产收益率, 净利润同比增长率, etc.
-    print(f"  Performance reports loaded: {len(yjbb)} rows")
-except Exception as e:
-    print(f"  WARNING: yjbb failed ({e}), using spot data only")
-    yjbb = pd.DataFrame()
+# Try recent dates for performance reports (data only published on report days)
+yjbb = pd.DataFrame()
+for days_back in [0, 1, 2, 3, 5, 7]:
+    try_date = (date.today() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    try:
+        yjbb = retry_call(lambda d=try_date: ak.stock_yjbb_em(date=d), f"stock_yjbb_em({try_date})", max_retries=2, delay=3)
+        if yjbb is not None and len(yjbb) > 10:
+            print(f"  Performance reports: {len(yjbb)} rows from {try_date}")
+            break
+        else:
+            print(f"  stock_yjbb_em({try_date}): {len(yjbb) if yjbb is not None else 0} rows, trying earlier...")
+    except Exception as e:
+        print(f"  stock_yjbb_em({try_date}) failed: {e}")
+else:
+    print(f"  WARNING: No performance report data found in recent week")
 
 # Build fundamental data map
 fund_data = {}
@@ -260,17 +280,24 @@ print("=" * 60)
 industry_map = {}
 
 if tushare_pro:
-    try:
-        bb = tushare_pro.bak_basic(trade_date=today.replace("-", ""),
-                                   fields="ts_code,name,industry")
-        # Map Tushare ts_code (000001.SZ) -> plain code (000001)
-        for _, row in bb.iterrows():
-            ts_code = row["ts_code"]
-            plain_code = ts_code.split(".")[0]  # 000001.SZ -> 000001
-            industry_map[plain_code] = row.get("industry", UNKNOWN_INDUSTRY)
-        print(f"  Tushare: loaded {len(industry_map)} stocks with industry data")
-    except Exception as e:
-        print(f"  Tushare bak_basic failed: {e}")
+    # Try today, yesterday, day before (in case today's data not yet available)
+    for days_back in [0, 1, 2, 3]:
+        try_date = (date.today() - timedelta(days=days_back)).strftime("%Y%m%d")
+        try:
+            bb = tushare_pro.bak_basic(trade_date=try_date, fields="ts_code,name,industry")
+            if len(bb) > 100:  # Should have thousands of stocks
+                for _, row in bb.iterrows():
+                    ts_code = row["ts_code"]
+                    plain_code = ts_code.split(".")[0]
+                    if plain_code not in industry_map:
+                        industry_map[plain_code] = row.get("industry", UNKNOWN_INDUSTRY)
+                print(f"  Tushare: loaded {len(industry_map)} stocks from {try_date}")
+                break
+            else:
+                print(f"  Tushare {try_date}: only {len(bb)} rows, trying earlier date...")
+        except Exception as e:
+            print(f"  Tushare {try_date} failed: {e}")
+        time.sleep(2)  # Rate limit
 
 # Fallback: per-stock akshare lookup if Tushare unavailable
 if not industry_map:
